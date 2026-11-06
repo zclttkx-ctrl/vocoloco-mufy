@@ -2352,7 +2352,53 @@ function buildVoiceCard(v) {
     updateVoiceUI();
     toast(`Voice "${v.name}" deleted`, { type: 'success' });
   });
+  const exportBtn = document.createElement('button');
+  exportBtn.className = 'vc-btn';
+  exportBtn.textContent = 'Export';
+  exportBtn.title = 'Export this voice and its cached tokens';
+  exportBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try {
+      const fresh = (await getSavedVoices()).find(item => item.id === v.id);
+      if (!fresh) throw new Error('Voice not found');
 
+      const record = normalizeVoiceRecord(fresh);
+      const data = {
+        format: 'vocoloco-voice-export-v1',
+        id: record.id,
+        name: record.name,
+        refAudio: Array.from(record.refAudio || []),
+        refText: record.refText || '',
+        tokens: record.tokens ? Array.from(record.tokens) : null,
+        tokenCount: record.tokenCount ?? null,
+        duration: record.duration ?? 0,
+        createdAt: record.createdAt,
+        lang: record.lang ?? null,
+        source: record.source ?? 'uploaded',
+        version: record.version ?? 2,
+        refInfo: record.refInfo ?? null,
+        refPrep: record.refPrep ?? null
+      };
+
+      const blob = new Blob(
+        [JSON.stringify(data)],
+        { type: 'application/json' }
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const safeName = String(record.name || 'voice').replace(/[^\w.-]+/g, '_');
+      a.href = url;
+      a.download = safeName + '-voice.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast('Voice exported', { type: 'success' });
+    } catch (err) {
+      toast('Export failed: ' + err.message, { type: 'error' });
+    }
+  });
+  btnRow.append(exportBtn);
   btnRow.append(playBtn, testBtn, delBtn);
   card.append(header, meta, btnRow);
 
