@@ -3736,6 +3736,169 @@ if (clearAllBtn) {
   });
 }
 
+/* ===== MUFY 1.6.4 - REAL TTS BRIDGE ===== */
+(() => {
+  const MUFY_ORIGIN = 'https://chat.mufy.ai';
+  const CHANNEL = 'mufy-vocoloco-164';
+  let mufyCancelled = false;
+  let mufyBusy = false;
+
+  function mufyReply(source, data, transfer = []) {
+    try {
+      source?.postMessage(
+        { channel: CHANNEL, ...data },
+        MUFY_ORIGIN,
+        transfer
+      );
+    } catch (e) {
+      console.warn('[Mufy Bridge] Reply failed:', e);
+    }
+  }
+
+  async function mufySynthesize(text) {
+    if (!isReady) throw new Error('VocoLoco 引擎尚未就绪');
+    if (mufyBusy || isGenerating) throw new Error('语音引擎正忙，请稍后');
+
+    mufyBusy = true;
+    isGenerating = true;
+    mufyCancelled = false;
+
+    try {
+      const voices = await getSavedVoices();
+      const voice = voices
+        .map(normalizeVoiceRecord)
+        .find(v => v && v.name === '姜潮生');
+
+      if (!voice) throw new Error('本地没有找到姜潮生声音');
+
+      if (!voice.tokens) {
+        setStatus('正在准备姜潮生声音…');
+        await encodeVoiceShared(voice);
+      }
+
+      if (!voice.tokens) {
+        throw new Error('姜潮生声音编码未完成');
+      }
+
+      const chunks = chunkText(text, {
+        refText: voice.refText,
+        refTokens: voice.tokens.length / 8
+      });
+
+      if (!chunks.length) throw new Error('没有可朗读的文字');
+
+      const parts = [];
+      let total = 0;
+
+      for (let i = 0; i < chunks.length; i++) {
+        if (mufyCancelled) throw new Error('已停止');
+
+        const msg = {
+          type: 'synthesize',
+          jobId: 'mufy-' + Date.now() + '-' + i,
+          text: chunks[i].text,
+          lang: null,
+          numStep: 16,
+          ...GEN_PARAMS,
+          speed: 1.0,
+          tempo: 0.88,
+          seed: null,
+          instruct: null,
+          normalize: false,
+          denoise: false,
+          leadMs: i === 0 ? EDGE_LEAD_MS : 100,
+          trailMs: i === chunks.length - 1 ? EDGE_TRAIL_MS : 100,
+          refTokens: new Int32Array(voice.tokens),
+          refText: voice.refText,
+          refInfo: voice.refInfo ?? null
+        };
+
+        setStatus(`姜潮生正在生成 ${i + 1}/${chunks.length}`);
+        const result = await sendJob(msg);
+
+        if (mufyCancelled || result.kind === 'cancelled') {
+          throw new Error('已停止');
+        }
+        if (result.kind !== 'audio') {
+          throw new Error(result.message || '语音生成失败');
+        }
+
+        parts.push(result.pcm);
+        total += result.pcm.length;
+
+        if (i < chunks.length - 1) {
+          const pause = /[。！？.!?]$/.test(chunks[i].text.trim())
+            ? 8400 : 3600;
+          parts.push(new Float32Array(pause));
+          total += pause;
+        }
+      }
+
+      const pcm = new Float32Array(total);
+      let offset = 0;
+      for (const part of parts) {
+        pcm.set(part, offset);
+        offset += part.length;
+      }
+
+      return { pcm, sampleRate: 24000 };
+    } finally {
+      mufyBusy = false;
+      isGenerating = false;
+      if (isReady) setStatus('Ready');
+    }
+  }
+
+  window.addEventListener('message', async event => {
+    if (event.origin !== MUFY_ORIGIN) return;
+    const data = event.data || {};
+    if (data.channel !== CHANNEL) return;
+
+    if (data.type === 'ping') {
+      let voiceFound = false;
+      try {
+        const voices = await getSavedVoices();
+        voiceFound = voices.some(v => v && v.name === '姜潮生');
+      } catch {}
+
+      mufyReply(event.source, {
+        type: 'pong',
+        ready: !!isReady && !isGenerating,
+        voiceFound
+      });
+      return;
+    }
+
+    if (data.type === 'cancel') {
+      mufyCancelled = true;
+      try { ttsWorker?.postMessage({ type: 'cancel' }); } catch {}
+      return;
+    }
+
+    if (data.type === 'synthesize') {
+      try {
+        const result = await mufySynthesize(String(data.text || ''));
+        const buffer = result.pcm.buffer;
+        mufyReply(event.source, {
+          type: 'audio',
+          id: data.id,
+          pcm: buffer,
+          sampleRate: result.sampleRate
+        }, [buffer]);
+      } catch (error) {
+        mufyReply(event.source, {
+          type: 'error',
+          id: data.id,
+          message: error?.message || String(error)
+        });
+      }
+    }
+  });
+
+  console.info('[Mufy Bridge] Ready to receive Jiang Chaosheng requests');
+})();
+/* ===== END MUFY BRIDGE ===== */
+
 // ─── Init ───────────────────────────────────────────────────────────────────
 
 // Offline use (sw.js): the app's files and the models' descriptions are kept as they load. Online
