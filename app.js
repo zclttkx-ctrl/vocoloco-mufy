@@ -2226,7 +2226,7 @@ async function testVoice(voice, btn) {
     leadMs: EDGE_LEAD_MS, trailMs: EDGE_TRAIL_MS,
   };
   // Phones encode in a worker of their own (encodeAlone): the speech model's worker has no room for it
-  if (!voice.tokens && LOW_MEMORY && encoderAvailable) {
+  if (!voice.tokens && LOW_MEMORY) {
   await encodeVoiceShared(voice).catch((e) => {
     console.warn('Voice encode failed:', e);
     toast(`Voice encode failed: ${e.message || e}`, {
